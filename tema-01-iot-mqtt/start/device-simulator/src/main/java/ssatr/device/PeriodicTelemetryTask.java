@@ -1,6 +1,8 @@
 package ssatr.device;
 
+import java.util.Locale;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /**
  * TASK PERIODIC, cu perioada T = periodMs: fiecare job citește senzorul și
@@ -47,6 +49,49 @@ public class PeriodicTelemetryTask implements Runnable {
         //
         // periodMs se poate schimba în timpul rulării (comanda SET_INTERVAL),
         // deci citiți-l la fiecare job.
+
+
+        // Punctul de start pe grilă (timp monoton)
+        long nextReleaseNano = System.nanoTime();
+
+        while (!Thread.currentThread().isInterrupted()) {
+            try {
+                // 1. Execuție job: citire senzor
+                double temp = sensor.read();
+                long nowWallClock = System.currentTimeMillis();
+
+                // 2. Publicare telemetrie pe MQTT: "deviceId;timestamp;temperatura"
+                String payload = String.format(Locale.US, "%s;%d;%.2f", deviceId, nowWallClock, temp);
+                mqtt.publish(Config.telemetryTopic(deviceId), payload);
+
+                // 3. Verificare depășire prag
+                if (temp > threshold) {
+                    // Punem valoarea temperaturii în coada de alarme
+                    alarmEvents.offer(temp);
+                }
+
+                // 4. Avansare pe grilă: r_(k+1) = r_k + T
+                // periodMs se citește la fiecare job deoarece se poate schimba prin comanda SET_INTERVAL
+                long currentPeriodNano = TimeUnit.MILLISECONDS.toNanos(periodMs);
+                nextReleaseNano += currentPeriodNano;
+
+                // 5. Așteptare absolută
+                long sleepTimeNano = nextReleaseNano - System.nanoTime();
+
+                if (sleepTimeNano > 0) {
+                    TimeUnit.NANOSECONDS.sleep(sleepTimeNano);
+                } else {
+                    // Overrun (depășire de perioadă): jobul curent a durat mai mult decât T.
+                    // Nu dormim deloc, jobul următor pornește imediat pentru a recupera grila.
+                }
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                System.err.println("[" + deviceId + "] Eroare in taskul periodic: " + e.getMessage());
+            }
+        }
     }
 
     public void setPeriodMs(long periodMs) {
