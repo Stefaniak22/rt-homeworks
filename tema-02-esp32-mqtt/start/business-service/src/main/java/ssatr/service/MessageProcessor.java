@@ -27,12 +27,49 @@ public class MessageProcessor implements Runnable {
 
     @Override
     public void run() {
-        // TODO 4: într-o buclă:
-        //   - preluați un mesaj: inbox.take()
-        //   - salvați mesajul în fișierul CSV: storage.append(kind, mesaj)
-        //     (CsvStorage este gata implementată)
-        //   - actualizați dashboard-ul, în funcție de kind
-        //   - alarmele și confirmările se afișează imediat în consolă
-        //   - un mesaj greșit (format invalid) nu trebuie să oprească thread-ul
+        while (!Thread.currentThread().isInterrupted()) {
+            try {
+                String message = inbox.take();
+
+                // 1. Salvare în CSV
+                storage.append(kind, message);
+
+                // 2. Parsare și actualizare Dashboard
+                String[] parts = message.split(";", -1);
+                if (parts.length < 3) {
+                    continue; // mesaj invalid, ignorăm fără a opri thread-ul
+                }
+
+                String deviceId = parts[0].trim();
+                long timestamp = Long.parseLong(parts[1].trim());
+
+                switch (kind) {
+                    case "telemetry":
+                        double temp = Double.parseDouble(parts[2].trim());
+                        dashboard.updateTelemetry(deviceId, timestamp, temp);
+                        break;
+
+                    case "alarm":
+                        double alarmTemp = Double.parseDouble(parts[2].trim());
+                        double threshold = parts.length > 3 ? Double.parseDouble(parts[3].trim()) : 0.0;
+                        dashboard.updateAlarm(deviceId, timestamp, alarmTemp);
+                        System.out.printf(">>> [ALARMA RECEPTIONATA] Device: %s | Temp: %.2f °C | Prag: %.2f | Timestamp: %d <<<%n",
+                                deviceId, alarmTemp, threshold, timestamp);
+                        break;
+
+                    case "status":
+                        String statusText = parts[2].trim();
+                        dashboard.updateStatus(deviceId, timestamp, statusText);
+                        System.out.printf("[STATUS CONFIRMATION] Device: %s -> %s%n", deviceId, statusText);
+                        break;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                // Erorile de parsare dintr-un mesaj corupt nu trebuie să oprească firul
+                System.out.println("[MessageProcessor-" + kind + "] Eroare procesare mesaj: " + e.getMessage());
+            }
+        }
     }
 }
